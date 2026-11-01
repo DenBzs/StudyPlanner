@@ -60,6 +60,36 @@ function S() {
 }
 
 const commit = () => ctx().saveSettingsDebounced();
+
+/** Surface errors on screen: on mobile there is no console to look at. */
+function reportError(e) {
+    console.error(`[${MODULE}]`, e);
+    try {
+        toastr.error(`Study Planner 오류: ${e?.message || e}`);
+    } catch (_) {
+        /* ignore */
+    }
+}
+
+/**
+ * Make an overlay visible even if style.css failed to load or is blocked:
+ * layout is forced inline, and a plain fallback look is applied when the stylesheet is missing.
+ */
+let warnedCss = false;
+function guardOverlay(el, z, bg) {
+    el.style.setProperty('position', 'fixed');
+    el.style.setProperty('inset', '0');
+    el.style.setProperty('z-index', String(z));
+    if (!getComputedStyle(el).getPropertyValue('--sp-radius').trim()) {
+        el.style.setProperty('background', bg);
+        el.style.setProperty('color', '#eee');
+        el.style.setProperty('overflow', 'auto');
+        if (!warnedCss) {
+            warnedCss = true;
+            toastr.warning('Study Planner: style.css를 불러오지 못했어요. 확장을 업데이트하거나 다시 설치해 주세요');
+        }
+    }
+}
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 const pad = (n) => String(n).padStart(2, '0');
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -581,7 +611,7 @@ function openFocus() {
         if (btn) {
             e.stopPropagation();
             if (btn.dataset.f === 'min') closeFocus();
-            if (btn.dataset.f === 'stop') stopSession();
+            if (btn.dataset.f === 'stop') stopSession().catch(reportError);
             return;
         }
         focusEl.classList.add('show-bar');
@@ -589,6 +619,7 @@ function openFocus() {
         barTimer = setTimeout(() => focusEl?.classList.remove('show-bar'), 4000);
     });
     document.body.appendChild(focusEl);
+    guardOverlay(focusEl, 10001, '#000');
     requestWake();
     scheduleTick();
     updatePill();
@@ -710,9 +741,21 @@ function openModal(which) {
         if (e.target.id === 'sp_extra') extraDraft = e.target.value;
     });
     document.body.appendChild(modalEl);
+    guardOverlay(modalEl, 10000, '#141518');
     updatePill();
     renderModal();
     scheduleTick();
+}
+
+/** Open the modal from any entry point without letting an error disappear silently. */
+function safeOpen(which) {
+    try {
+        openModal(which);
+    } catch (e) {
+        reportError(e);
+        modalEl?.remove();
+        modalEl = null;
+    }
 }
 
 function closeModal() {
@@ -1169,7 +1212,12 @@ function onModalClick(e) {
         if (e.target === modalEl) closeModal();
         return;
     }
-    handlers[el.dataset.act]?.(el, e);
+    try {
+        const result = handlers[el.dataset.act]?.(el, e);
+        if (result && typeof result.catch === 'function') result.catch(reportError);
+    } catch (err) {
+        reportError(err);
+    }
 }
 
 function onModalChange(e) {
@@ -1251,7 +1299,7 @@ function addMenuButton() {
     item.className = 'list-group-item flex-container flexGap5 interactable';
     item.tabIndex = 0;
     item.innerHTML = `<div class="fa-solid fa-book-open-reader extensionsMenuExtensionButton"></div><span>Study Planner</span>`;
-    item.addEventListener('click', () => openModal('today'));
+    item.addEventListener('click', () => safeOpen('today'));
     menu.appendChild(item);
 }
 
@@ -1281,7 +1329,7 @@ function addSettingsPanel() {
         refreshInjection();
         updatePill();
     });
-    document.getElementById('sp_open_btn').addEventListener('click', () => openModal('today'));
+    document.getElementById('sp_open_btn').addEventListener('click', () => safeOpen('today'));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1294,14 +1342,29 @@ function init() {
     initialized = true;
     const { eventSource, event_types } = ctx();
 
-    addMenuButton();
-    addSettingsPanel();
-    createPill();
+    // UI first, so the entry points exist even if a later step fails.
+    for (const step of [addMenuButton, addSettingsPanel, createPill]) {
+        try {
+            step();
+        } catch (e) {
+            reportError(e);
+        }
+    }
 
-    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, () => refreshInjection());
+    eventSource.on(event_types.GENERATION_AFTER_COMMANDS, () => {
+        try {
+            refreshInjection();
+        } catch (e) {
+            reportError(e);
+        }
+    });
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        refreshInjection();
-        if (modalEl) renderModal();
+        try {
+            refreshInjection();
+            if (modalEl) renderModal();
+        } catch (e) {
+            reportError(e);
+        }
     });
 
     document.addEventListener('visibilitychange', () => {
@@ -1315,9 +1378,13 @@ function init() {
         else if (modalEl) closeModal();
     });
 
-    refreshInjection();
-    scheduleTick();
-    updatePill();
+    try {
+        refreshInjection();
+        scheduleTick();
+        updatePill();
+    } catch (e) {
+        reportError(e);
+    }
     console.log(`[${MODULE}] loaded`);
 }
 
