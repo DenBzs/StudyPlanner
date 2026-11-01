@@ -1,0 +1,11 @@
+{
+    "display_name": "Study Planner",
+    "loading_order": 20,
+    "dependencies": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "DenBzs",
+    "version": "0.1.0-beta",
+    "homePage": "https://github.com/DenBzs/StudyPlanner",
+    "auto_update": true
+}
